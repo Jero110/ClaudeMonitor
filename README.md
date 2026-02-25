@@ -87,7 +87,7 @@ claude_monitor() {
   pkill -9 -f "python3.*7337" 2>/dev/null
   sleep 0.3
 
-  trap 'echo "\nStopping monitor…"; pkill -9 -f "claude-monitor.sh" 2>/dev/null; pkill -9 -f "python3.*7337" 2>/dev/null; trap - INT QUIT; return 0' INT QUIT
+  trap 'echo "\nStopping monitor…"; pkill -9 -f "claude-monitor.sh" 2>/dev/null; pkill -9 -f "python3.*7337" 2>/dev/null; lsof -ti tcp:7337 2>/dev/null | xargs kill -9 2>/dev/null; trap - INT QUIT; return 0' INT QUIT
 
   echo "Starting claude monitor… (Ctrl+C to stop)"
 
