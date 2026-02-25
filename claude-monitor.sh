@@ -115,6 +115,8 @@ except: pass
 print(last)
 " 2>/dev/null)
       local agent_status="completed"
+      # Check if file was modified in the last 10 seconds (agent actively writing)
+      local file_age=$(python3 -c "import os,time; print(int(time.time()-os.path.getmtime('$f')))" 2>/dev/null || echo 9999)
       local last_json=$(python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip()))" 2>/dev/null <<< "$last_line")
       [ -z "$last_json" ] && last_json='""'
 
@@ -150,8 +152,8 @@ for line in lines:
 print(json.dumps({'session': session_id, 'model': model, 'input': input_tok, 'output': output_tok, 'cwd': cwd}))
 " 2>/dev/null || echo '{}')
       session_id=$(echo "$conv_data" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session',''))" 2>/dev/null)
-      # If the agent's sessionId matches an active process → running
-      if [ -n "$session_id" ] && echo "$active_sessions" | grep -q " $session_id "; then
+      # Running only if parent session is active AND file modified within last 10 seconds
+      if [ "$file_age" -lt 10 ] && [ -n "$session_id" ] && echo "$active_sessions" | grep -q " $session_id "; then
         agent_status="running"
       fi
       agent_model=$(echo "$conv_data" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('model',''))" 2>/dev/null)
@@ -211,6 +213,9 @@ except:
 }
 JSONEOF
 }
+
+# Kill any existing process on our port before starting
+lsof -ti tcp:$PORT 2>/dev/null | xargs kill -9 2>/dev/null || true
 
 # Collect once immediately
 collect_data

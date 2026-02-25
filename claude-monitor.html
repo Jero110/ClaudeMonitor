@@ -299,6 +299,7 @@
     font-size: 11px;
     color: var(--text2);
     letter-spacing: 0.04em;
+    position: relative;
   }
 
   .td-model .model-pill {
@@ -420,8 +421,10 @@
     color: var(--text3);
     cursor: pointer;
     transition: all 150ms ease;
-    margin-left: 4px;
-    flex-shrink: 0;
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
   }
 
   .kill-btn:hover {
@@ -491,6 +494,20 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+
+  .resizer {
+    width: 4px;
+    cursor: col-resize;
+    flex-shrink: 0;
+    background: transparent;
+    transition: background 150ms ease;
+    position: relative;
+    z-index: 10;
+  }
+
+  .resizer:hover, .resizer.dragging {
+    background: var(--border3);
   }
 
   /* ─── PROCESS TREE ───────────────────────────────────────────── */
@@ -1165,10 +1182,6 @@
       <span class="stat-label">processes</span>
     </div>
     <div class="stat-item">
-      <span class="stat-num" id="stat-agents">0</span>
-      <span class="stat-label">agents</span>
-    </div>
-    <div class="stat-item">
       <span class="stat-num" id="stat-cpu">0.0%</span>
       <span class="stat-label">cpu</span>
     </div>
@@ -1191,10 +1204,10 @@
         <table class="process-table" id="process-table">
           <thead>
             <tr>
+              <th>Session</th>
               <th>PID</th>
               <th>Model</th>
               <th>Source</th>
-              <th>Session</th>
               <th>TTY</th>
               <th class="th-right">CPU</th>
               <th class="th-right">MEM</th>
@@ -1209,8 +1222,10 @@
       </div>
     </div>
 
+    <div class="resizer" id="resizer"></div>
+
     <!-- RIGHT COLUMN -->
-    <div class="col-right">
+    <div class="col-right" id="col-right">
 
       <!-- Process Tree -->
       <div class="tree-panel">
@@ -1222,10 +1237,10 @@
         </div>
       </div>
 
-      <!-- Agents + Tasks (tabbed) -->
+      <!-- Agents + Tasks tabbed -->
       <div class="agents-panel">
         <div class="panel-header" style="padding:0;">
-          <div style="display:flex;height:100%;border-bottom:none;">
+          <div style="display:flex;height:100%;">
             <button class="tab-btn active" id="tab-agents" onclick="switchTab('agents')">Agents <span id="agent-count" style="color:var(--text3);font-size:9px;margin-left:3px;">0</span></button>
             <button class="tab-btn" id="tab-tasks" onclick="switchTab('tasks')">Tasks <span id="task-count" style="color:var(--text3);font-size:9px;margin-left:3px;">0</span></button>
           </div>
@@ -1274,15 +1289,12 @@ const state = {
   lastFetch: null,
   expandedPids: new Set(),
   expandedAgents: new Set(),
-  expandedSessions: new Set(),
   killTarget: null,
   logs: [],
   logOpen: false,
   agentConvData: {},
   agentConvLoading: new Set(),
   procConvData: {},
-  procConvLoading: new Set(),
-  activeTab: 'agents',
   sessionNames: {},  // sessionId -> name
 };
 
@@ -1371,30 +1383,34 @@ function flashTimestamp(ts) {
 
 // ─── RENDER ───────────────────────────────────────────────────────────────────
 
-function render(data) {
-  const procs   = data.processes || [];
+async function render(data) {
+  let procs     = data.processes || [];
   const agents  = data.agents    || [];
-  // Store session names globally for use in renders
   state.sessionNames = data.sessionNames || {};
 
   // Stats
   const totalCpu = procs.reduce((s, p) => s + (parseFloat(p.cpu) || 0), 0);
   const totalMem = procs.reduce((s, p) => s + (parseFloat(p.mem) || 0), 0);
   document.getElementById('stat-procs').textContent = procs.length;
-  document.getElementById('stat-agents').textContent = agents.length;
   document.getElementById('stat-cpu').textContent   = fmt(totalCpu) + '%';
   document.getElementById('stat-mem').textContent   = fmt(totalMem) + '%';
   document.getElementById('proc-count').textContent  = procs.length;
-  document.getElementById('agent-count').textContent = agents.length;
+  const activeSessionIds = new Set(procs.map(p => p.sessionId).filter(Boolean));
+  const activeAgents = agents.filter(a => a.sessionId && activeSessionIds.has(a.sessionId));
+  document.getElementById('agent-count').textContent = activeAgents.length;
+  document.getElementById('task-count').textContent = agents.length;
 
-  // Tasks = agents shown in tasks tab too
-  const tasks = agents; // all agent output files are tasks
-  document.getElementById('task-count').textContent = tasks.length;
-
-  renderProcessTable(procs);
+  // Sort processes by PID ascending (stable order)
+  procs = [...procs].sort((a, b) => a.pid - b.pid);
+  // Fetch fresh conversation data for expanded processes BEFORE rendering
+  await Promise.all(procs
+    .filter(p => state.expandedPids.has(p.pid) && p.sessionId)
+    .map(p => refreshProcConv(p.pid, p.sessionId))
+  );
+  renderProcessTable(procs, true);
   renderTree(procs);
-  renderAgents(agents);
-  renderTasks(tasks);
+  renderTasks(activeAgents, 'agents-scroll');
+  renderTasks(agents, 'tasks-scroll');
 }
 
 function fmtTokens(n) {
@@ -1405,8 +1421,10 @@ function fmtTokens(n) {
 
 // ─── PROCESS TABLE ────────────────────────────────────────────────────────────
 
-function renderProcessTable(procs) {
+function renderProcessTable(procs, skipConvRefresh = false) {
   const tbody = document.getElementById('process-tbody');
+  const wrap = tbody.closest('.table-wrap');
+  const scrollTop = wrap ? wrap.scrollTop : 0;
 
   if (!procs.length) {
     tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state"><div class="empty-icon">◦</div>no processes</div></td></tr>`;
@@ -1423,14 +1441,6 @@ function renderProcessTable(procs) {
 
     rows.push(`
       <tr data-pid="${p.pid}" class="proc-row" onclick="toggleProcExpand(${p.pid})">
-        <td class="td-pid">
-          <div style="display:flex;align-items:center;">
-            <span>${p.pid}</span>
-            <span class="kill-btn" onclick="openKillModal(event, ${p.pid})">×</span>
-          </div>
-        </td>
-        <td class="td-model"><span class="model-pill ${model}">${model}</span></td>
-        <td class="td-source"><span class="source-icon">${p.source || '—'}</span></td>
         <td class="td-cwd">
           ${p.sessionName
             ? `<span style="color:var(--text);font-weight:500">${escHtml(p.sessionName)}</span>`
@@ -1439,6 +1449,12 @@ function renderProcessTable(procs) {
               : '<span style="color:var(--text4)">—</span>'
           }
         </td>
+        <td class="td-pid">
+          <span>${p.pid}</span>
+          <span class="kill-btn" onclick="openKillModal(event, ${p.pid})">×</span>
+        </td>
+        <td class="td-model"><span class="model-pill ${model}">${model}</span></td>
+        <td class="td-source"><span class="source-icon">${p.source || '—'}</span></td>
         <td class="td-tty">${p.tty || '—'}</td>
         <td class="td-cpu ${cpuClass}" style="text-align:right">${fmt(p.cpu)}%</td>
         <td class="td-mem" style="text-align:right">${fmt(p.mem)}%</td>
@@ -1471,23 +1487,27 @@ function renderProcessTable(procs) {
           </div>`
         : '';
 
-      // Conversation for this process
+      // Conversation for this process — only last user + last assistant message
       const convMsgs = state.procConvData[p.pid];
-      const convLoading = state.procConvLoading.has(p.pid);
-      const convHtml = p.sessionId ? `
-        <div style="margin-top:12px">
-          <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text3);margin-bottom:6px">Last Messages</div>
-          ${convLoading
-            ? `<div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);padding:8px 0">Loading…</div>`
-            : !convMsgs || !convMsgs.length
-              ? `<div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);padding:8px 0">No messages yet</div>`
-              : convMsgs.map(m => `
-                <div style="padding:6px 0;border-bottom:1px solid var(--border)">
-                  <div style="font-size:9px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:${m.role==='assistant'?'#4a7fa8':'var(--text3)'};margin-bottom:3px">${m.role}</div>
-                  <div style="font-family:var(--font-mono);font-size:10px;color:var(--text2);white-space:pre-wrap;word-break:break-word;line-height:1.6;max-height:120px;overflow-y:auto">${escHtml(m.content)}</div>
-                </div>`).join('')
-          }
-        </div>` : '';
+      const convLoading = false;
+      let convHtml = '';
+      if (p.sessionId) {
+        let innerHtml = '';
+        if (convLoading) {
+          innerHtml = `<div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);padding:4px 0">Loading…</div>`;
+        } else if (convMsgs && convMsgs.length) {
+          const lastUser = [...convMsgs].reverse().find(m => m.role === 'user');
+          const lastAsst = [...convMsgs].reverse().find(m => m.role === 'assistant');
+          const toShow = [lastUser, lastAsst].filter(Boolean);
+          innerHtml = toShow.map(m => `
+            <div style="margin-bottom:6px">
+              <span style="font-size:9px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:${m.role==='assistant'?'#4a7fa8':'var(--text3)'};">${m.role} </span><span style="font-family:var(--font-mono);font-size:10px;color:var(--text2)">${escHtml(m.content.slice(0, 200))}${m.content.length > 200 ? '…' : ''}</span>
+            </div>`).join('');
+        }
+        if (innerHtml) {
+          convHtml = `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">${innerHtml}</div>`;
+        }
+      }
 
       rows.push(`
         <tr class="expand-row">
@@ -1513,6 +1533,7 @@ function renderProcessTable(procs) {
   }
 
   tbody.innerHTML = rows.join('');
+  if (wrap) wrap.scrollTop = scrollTop;
 }
 
 function formatCmd(cmd) {
@@ -1538,8 +1559,6 @@ function toggleProcExpand(pid) {
 }
 
 async function loadProcConv(pid, sessionId) {
-  if (state.procConvData[pid] || state.procConvLoading.has(pid)) return;
-  state.procConvLoading.add(pid);
   const p = (state.data?.processes || []).find(x => x.pid === pid);
   const cwd = p?.cmd ? (p.cmd.match(/--cwd[= ]([^\s]+)/)?.[1] || '') : '';
   try {
@@ -1550,10 +1569,10 @@ async function loadProcConv(pid, sessionId) {
       state.procConvData[pid] = d.messages || [];
     }
   } catch (_) {}
-  finally {
-    state.procConvLoading.delete(pid);
-    if (state.data) renderProcessTable(state.data.processes || []);
-  }
+}
+
+async function refreshProcConv(pid, sessionId) {
+  return loadProcConv(pid, sessionId);
 }
 
 // ─── PROCESS TREE ─────────────────────────────────────────────────────────────
@@ -1611,132 +1630,54 @@ function renderTree(procs) {
 
 // ─── TABS ─────────────────────────────────────────────────────────────────────
 
+// ─── TASKS ────────────────────────────────────────────────────────────────────
+
 function switchTab(tab) {
-  state.activeTab = tab;
   document.getElementById('tab-agents').classList.toggle('active', tab === 'agents');
   document.getElementById('tab-tasks').classList.toggle('active', tab === 'tasks');
   document.getElementById('agents-scroll').style.display = tab === 'agents' ? '' : 'none';
   document.getElementById('tasks-scroll').style.display  = tab === 'tasks'  ? '' : 'none';
 }
 
-// ─── AGENTS ───────────────────────────────────────────────────────────────────
-
-function renderAgents(agents) {
-  const container = document.getElementById('agents-scroll');
-  if (!agents.length) {
-    container.innerHTML = `<div class="empty-state" style="padding:20px"><span style="font-size:11px">no agents</span></div>`;
-    return;
-  }
-
-  // Group by sessionId
-  const sessions = {};
-  const noSession = [];
-  agents.forEach(a => {
-    const sid = a.sessionId || '';
-    if (sid) {
-      if (!sessions[sid]) sessions[sid] = [];
-      sessions[sid].push(a);
-    } else {
-      noSession.push(a);
-    }
-  });
-
-  let html = '';
-
-  // Render session groups
-  Object.entries(sessions).forEach(([sid, sagents]) => {
-    const hasRunning = sagents.some(a => a.status === 'running');
-    const expanded = state.expandedSessions.has(sid) !== false; // default open
-    // Default open sessions that haven't been explicitly collapsed
-    const isOpen = !state.expandedSessions.has('__closed__' + sid);
-    const shortSid = sid.slice(0, 8) + '…' + sid.slice(-4);
-    const sessionLabel = state.sessionNames[sid] || shortSid;
-
-    html += `
-      <div class="session-group">
-        <div class="session-header" onclick="toggleSession('${escHtml(sid)}')">
-          <span class="session-dot ${hasRunning ? 'has-running' : ''}"></span>
-          <span class="session-id">${escHtml(sessionLabel)}</span>
-          <span class="session-badge">${sagents.length}</span>
-          <span class="session-chevron ${isOpen ? 'open' : ''}">▶</span>
-        </div>
-        ${isOpen ? `<div class="session-agents">${sagents.map(a => agentCardHtml(a)).join('')}</div>` : ''}
-      </div>`;
-  });
-
-  // Render ungrouped agents
-  noSession.forEach(a => { html += agentCardHtml(a); });
-
-  container.innerHTML = html || `<div class="empty-state" style="padding:20px"><span style="font-size:11px">no agents</span></div>`;
-}
-
-function agentCardHtml(a) {
-  const expanded = state.expandedAgents.has(a.id);
-  const model    = parseModel(a.model);
-  const status   = (a.status || 'unknown').toLowerCase();
-  const cwd      = shortPath(a.cwd || null);
-  const lastLine = a.lastLine || '';
-  const convHtml = expanded ? renderConvHtml(a) : '';
-
-  let tokensHtml = '';
-  if (a.tokens && (a.tokens.input || a.tokens.output)) {
-    tokensHtml = `
-      <div class="agent-tokens">
-        <span class="token-item">in <span>${fmtTokens(a.tokens.input || 0)}</span></span>
-        <span class="token-item">out <span>${fmtTokens(a.tokens.output || 0)}</span></span>
-      </div>`;
-  }
-
-  return `
-    <div class="agent-card ${expanded ? 'expanded' : ''}" onclick="toggleAgent('${escHtml(a.id)}')">
-      <div class="agent-header">
-        <span class="agent-id">${a.sessionName ? `<span style="color:var(--text);font-weight:500">${escHtml(a.sessionName)}</span> <span style="color:var(--text3)">·</span> ` : ''}${escHtml(shortId(a.id))}</span>
-        <span class="agent-status ${status}">${status}</span>
-      </div>
-      <div class="agent-body">
-        <div class="agent-meta-row">
-          <span class="agent-cwd" title="${escHtml(a.cwd || '')}">${escHtml(cwd)}</span>
-          <span class="agent-model-label">${escHtml(a.model || model)}</span>
-        </div>
-        ${a.sessionId ? `<div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);margin-bottom:3px;user-select:all" title="session id">${a.sessionId}</div>` : ''}
-        ${lastLine ? `<div class="agent-last-line">${escHtml(lastLine)}</div>` : ''}
-        ${tokensHtml}
-      </div>
-      ${expanded ? `<div class="agent-conv" onclick="event.stopPropagation()">${convHtml}</div>` : ''}
-    </div>`;
-}
-
-function toggleSession(sid) {
-  const key = '__closed__' + sid;
-  if (state.expandedSessions.has(key)) {
-    state.expandedSessions.delete(key);
-  } else {
-    state.expandedSessions.add(key);
-  }
-  if (state.data) renderAgents(state.data.agents || []);
-}
-
-// ─── TASKS ────────────────────────────────────────────────────────────────────
-
-function renderTasks(tasks) {
-  const container = document.getElementById('tasks-scroll');
+function renderTasks(tasks, containerId = 'tasks-scroll') {
+  const container = document.getElementById(containerId);
+  const emptyLabel = containerId === 'agents-scroll' ? 'no agents' : 'no tasks';
   if (!tasks.length) {
-    container.innerHTML = `<div class="empty-state" style="padding:20px"><span style="font-size:11px">no tasks</span></div>`;
+    container.innerHTML = `<div class="empty-state" style="padding:20px"><span style="font-size:11px">${emptyLabel}</span></div>`;
     return;
   }
 
   container.innerHTML = tasks.map(t => {
-    const status = (t.status || 'unknown').toLowerCase();
-    const model  = t.model || '—';
-    const cwd    = shortPath(t.cwd || null);
-    const last   = t.lastLine || '—';
-    const inTok  = fmtTokens(t.tokens?.input  || 0);
-    const outTok = fmtTokens(t.tokens?.output || 0);
+    const status   = (t.status || 'unknown').toLowerCase();
+    const model    = t.model || '—';
+    const cwd      = shortPath(t.cwd || null);
+    const last     = t.lastLine || '—';
+    const inTok    = fmtTokens(t.tokens?.input  || 0);
+    const outTok   = fmtTokens(t.tokens?.output || 0);
+    const expanded = state.expandedAgents.has(t.id);
+    const convData = state.agentConvData[t.id];
+
+    let convHtml = '';
+    if (expanded) {
+      if (!convData) {
+        convHtml = `<div style="padding:8px 10px;font-family:var(--font-mono);font-size:10px;color:var(--text3)">Loading…</div>`;
+      } else if (!convData.length) {
+        convHtml = `<div style="padding:8px 10px;font-family:var(--font-mono);font-size:10px;color:var(--text3)">No messages</div>`;
+      } else {
+        const lastUser = [...convData].reverse().find(m => m.role === 'user');
+        const lastAsst = [...convData].reverse().find(m => m.role === 'assistant');
+        convHtml = [lastUser, lastAsst].filter(Boolean).map(m => `
+          <div style="padding:6px 10px;border-top:1px solid var(--border)">
+            <div style="font-size:9px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:${m.role==='assistant'?'#4a7fa8':'var(--text3)'};margin-bottom:3px">${m.role}</div>
+            <div style="font-family:var(--font-mono);font-size:10px;color:var(--text2);white-space:pre-wrap;word-break:break-word;line-height:1.6">${escHtml(m.content.slice(0,300))}${m.content.length>300?'…':''}</div>
+          </div>`).join('');
+      }
+    }
 
     return `
-      <div class="task-card">
+      <div class="task-card ${expanded ? 'expanded' : ''}" onclick="toggleTaskExpand('${escHtml(t.id)}')">
         <div class="task-header">
-          <span class="task-id">${escHtml(shortId(t.id))}</span>
+          <span class="task-id">${t.sessionName ? `<span style="color:var(--text);font-weight:500">${escHtml(t.sessionName)}</span> · ` : ''}${escHtml(shortId(t.id))}</span>
           <span class="task-status ${status}">${status}</span>
         </div>
         <div class="task-preview">${escHtml(last)}</div>
@@ -1746,8 +1687,24 @@ function renderTasks(tasks) {
           <span>${inTok} in / ${outTok} out</span>
           <span>${t.lastUpdate || ''}</span>
         </div>
+        ${expanded ? `<div onclick="event.stopPropagation()">${convHtml}</div>` : ''}
       </div>`;
   }).join('');
+}
+
+function toggleTaskExpand(id) {
+  if (state.expandedAgents.has(id)) {
+    state.expandedAgents.delete(id);
+  } else {
+    state.expandedAgents.add(id);
+    loadAgentConv(id);
+  }
+  if (state.data) {
+    const activeSessionIds = new Set((state.data.processes || []).map(p => p.sessionId).filter(Boolean));
+    const activeAgents = (state.data.agents || []).filter(a => a.sessionId && activeSessionIds.has(a.sessionId));
+    renderTasks(activeAgents, 'agents-scroll');
+    renderTasks(state.data.agents || [], 'tasks-scroll');
+  }
 }
 
 function renderConvHtml(agent) {
@@ -1784,11 +1741,11 @@ function toggleAgent(id) {
     state.expandedAgents.add(id);
     loadAgentConv(id);
   }
-  if (state.data) renderAgents(state.data.agents || []);
+  if (state.data) renderTasks(state.data.agents || []);
 }
 
 async function loadAgentConv(id) {
-  if (state.agentConvData[id] || state.agentConvLoading.has(id)) return;
+  if (state.agentConvLoading.has(id)) return;
   state.agentConvLoading.add(id);
   try {
     const res = await fetch(`http://localhost:7337/agent/${encodeURIComponent(id)}`, { cache: 'no-store' });
@@ -1800,7 +1757,12 @@ async function loadAgentConv(id) {
     // Silently fail — no conversation endpoint, show lastLine only
   } finally {
     state.agentConvLoading.delete(id);
-    if (state.data) renderAgents(state.data.agents || []);
+    if (state.data) {
+      const activeSessionIds = new Set((state.data.processes || []).map(p => p.sessionId).filter(Boolean));
+      const activeAgents = (state.data.agents || []).filter(a => a.sessionId && activeSessionIds.has(a.sessionId));
+      renderTasks(activeAgents, 'agents-scroll');
+      renderTasks(state.data.agents || [], 'tasks-scroll');
+    }
   }
 }
 
@@ -1864,6 +1826,40 @@ function renderLog() {
 
 fetchData();
 setInterval(fetchData, 5000);
+
+// ─── RESIZER ──────────────────────────────────────────────────────────────────
+
+(function() {
+  const resizer  = document.getElementById('resizer');
+  const colRight = document.getElementById('col-right');
+  const minW = 200, maxW = 600;
+  let startX, startW;
+
+  resizer.addEventListener('mousedown', e => {
+    startX = e.clientX;
+    startW = colRight.offsetWidth;
+    resizer.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function onMove(e) {
+      const delta = startX - e.clientX;
+      const newW  = Math.min(maxW, Math.max(minW, startW + delta));
+      colRight.style.width = newW + 'px';
+    }
+
+    function onUp() {
+      resizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+})();
 </script>
 </body>
 </html>

@@ -140,24 +140,39 @@ claude_monitor        # start monitor + open browser (Ctrl+C to stop)
 
 ## Dashboard
 
+### Process table (left panel)
+
 | Column | Description |
 |--------|-------------|
+| Session | Named session or UUID prefix |
 | PID | Process ID |
 | Model | haiku / sonnet / opus |
-| Source | How Claude was launched |
-| Session | Named session or UUID prefix |
+| Source | How Claude was launched (terminal / vscode) |
+| TTY | Terminal device |
 | CPU / MEM | Resource usage |
 
 Click any process row to expand and see:
-
-- Last conversation messages
+- Last user + assistant message (auto-refreshes every 5s)
 - Sub-agents launched by that session
-- Full command
+- Full command, RSS, VSZ, stat
+
+### Right panel
+
+Two tabs:
+- **Agents** — tasks linked to an active process (running or just completed). Click to expand last messages.
+- **Tasks** — full history of all agent `.output` files. Click to expand last messages.
+
+The divider between left and right panels is draggable — drag left or right to resize.
+
+### Process tree
+
+Shows the parent→child relationship between processes and their sub-agents.
 
 ## How it works
 
 - Reads live process list via `ps aux`
 - Reads agent output from `/tmp/claude-*/tasks/*.output`
+- Detects agent status by file modification time (active if modified within last 10s and parent session is alive)
 - Reads conversation history from `~/.claude/projects/<project>/<sessionId>.jsonl`
 - Serves JSON at `http://localhost:7337/data`
 - Auto-refreshes every 5 seconds
