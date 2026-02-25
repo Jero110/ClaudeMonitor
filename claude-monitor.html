@@ -1,0 +1,1869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0a0a0a;
+    --bg1:      #111111;
+    --bg2:      #161616;
+    --bg3:      #1a1a1a;
+    --border:   #1a1a1a;
+    --border2:  #222222;
+    --border3:  #2a2a2a;
+    --text:     #f0f0f0;
+    --text2:    #aaaaaa;
+    --text3:    #777777;
+    --text4:    #555555;
+    --white:    #f0f0f0;
+    --red:      #e05555;
+    --green:    #5a9e6f;
+    --amber:    #b8882a;
+    --blue:     #4a7fa8;
+    --emerald:  #3d8a6e;
+
+    --font-mono: 'Geist Mono', 'JetBrains Mono', 'Fira Code', monospace;
+    --font-ui:   'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { font-size: 13px; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    line-height: 1.5;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border3); border-radius: 2px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text3); }
+
+  /* ─── LAYOUT ─────────────────────────────────────────────────── */
+
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ─── HEADER ─────────────────────────────────────────────────── */
+
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    height: 44px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--bg);
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .logo {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--text);
+    text-transform: lowercase;
+  }
+
+  .logo-sep {
+    color: var(--text3);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text3);
+    flex-shrink: 0;
+    transition: background 150ms ease;
+  }
+
+  .status-dot.connected {
+    background: var(--green);
+    animation: live-pulse 2.5s ease-in-out infinite;
+  }
+
+  .status-dot.error {
+    background: var(--red);
+  }
+
+  @keyframes live-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
+  .header-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .meta-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+    letter-spacing: 0.04em;
+  }
+
+  .meta-value {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text2);
+    letter-spacing: 0.04em;
+  }
+
+  .meta-value.flash {
+    color: var(--white);
+    transition: color 150ms ease;
+  }
+
+  /* ─── STATS BAR ──────────────────────────────────────────────── */
+
+  .stats-bar {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 0 20px;
+    height: 36px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .stat-item {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 0 16px 0 0;
+    margin-right: 16px;
+    border-right: 1px solid var(--border);
+  }
+
+  .stat-item:last-child {
+    border-right: none;
+  }
+
+  .stat-num {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.02em;
+    transition: color 150ms ease;
+  }
+
+  .stat-label {
+    font-size: 10px;
+    color: var(--text3);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+
+  /* ─── MAIN CONTENT ───────────────────────────────────────────── */
+
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ─── LEFT COLUMN ────────────────────────────────────────────── */
+
+  .col-left {
+    flex: 1;
+    min-width: 0;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    height: 36px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .panel-title {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text3);
+  }
+
+  .panel-count {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+  }
+
+  /* ─── PROCESS TABLE ──────────────────────────────────────────── */
+
+  .table-wrap {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .process-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .process-table thead {
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+  }
+
+  .process-table th {
+    padding: 7px 12px;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text3);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    user-select: none;
+  }
+
+  .process-table td {
+    padding: 0 12px;
+    height: 36px;
+    vertical-align: middle;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    transition: background 150ms ease;
+  }
+
+  .process-table tbody tr {
+    cursor: pointer;
+    position: relative;
+  }
+
+  .process-table tbody tr:hover td {
+    background: var(--bg1);
+  }
+
+  .process-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .td-pid {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text2);
+    letter-spacing: 0.04em;
+  }
+
+  .td-model .model-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: lowercase;
+    border: 1px solid transparent;
+  }
+
+  .model-pill.haiku {
+    background: rgba(61,138,110,0.1);
+    color: #5aaa88;
+    border-color: rgba(61,138,110,0.2);
+  }
+
+  .model-pill.sonnet {
+    background: rgba(74,127,168,0.1);
+    color: #6a9fc0;
+    border-color: rgba(74,127,168,0.2);
+  }
+
+  .model-pill.opus {
+    background: rgba(184,136,42,0.1);
+    color: #c8a050;
+    border-color: rgba(184,136,42,0.2);
+  }
+
+  .model-pill.unknown {
+    background: rgba(100,100,100,0.08);
+    color: var(--text3);
+    border-color: var(--border2);
+  }
+
+  .td-source {
+    font-size: 10px;
+    color: var(--text3);
+    letter-spacing: 0.04em;
+  }
+
+  .source-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .td-cwd {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text2);
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .td-tty {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+  }
+
+  .td-cpu, .td-mem {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text2);
+    text-align: right;
+  }
+
+  .td-cpu.high { color: var(--red); }
+  .td-cpu.med  { color: var(--amber); }
+
+  .td-started {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+  }
+
+  .td-expand {
+    width: 32px;
+    text-align: center;
+  }
+
+  .expand-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 3px;
+    font-size: 10px;
+    color: var(--text3);
+    transition: all 150ms ease;
+    user-select: none;
+  }
+
+  .expand-btn:hover {
+    background: var(--bg3);
+    color: var(--text);
+  }
+
+  .expand-btn.open {
+    color: var(--text);
+    transform: rotate(90deg);
+  }
+
+  .kill-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    font-size: 12px;
+    color: var(--text3);
+    cursor: pointer;
+    transition: all 150ms ease;
+    margin-left: 4px;
+    flex-shrink: 0;
+  }
+
+  .kill-btn:hover {
+    background: rgba(224,85,85,0.1);
+    color: var(--red);
+  }
+
+  .process-table tbody tr:hover .kill-btn {
+    display: inline-flex;
+  }
+
+  /* ─── EXPANDED ROW ───────────────────────────────────────────── */
+
+  .expand-row td {
+    padding: 0 !important;
+    height: auto !important;
+  }
+
+  .expand-content {
+    padding: 12px 16px 14px 40px;
+    background: var(--bg1);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .expand-grid {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 4px 12px;
+    margin-bottom: 10px;
+  }
+
+  .expand-key {
+    font-size: 10px;
+    color: var(--text3);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-weight: 500;
+    padding-top: 1px;
+  }
+
+  .expand-val {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text2);
+    word-break: break-all;
+    line-height: 1.6;
+  }
+
+  .cmd-block {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text2);
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: 4px;
+    padding: 8px 10px;
+    word-break: break-all;
+    line-height: 1.7;
+    white-space: pre-wrap;
+  }
+
+  /* ─── RIGHT COLUMN ───────────────────────────────────────────── */
+
+  .col-right {
+    width: 320px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ─── PROCESS TREE ───────────────────────────────────────────── */
+
+  .tree-panel {
+    flex: 0 0 auto;
+    max-height: 240px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .tree-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+
+  .tree-node {
+    display: flex;
+    align-items: center;
+    padding: 3px 16px;
+    gap: 0;
+    min-height: 24px;
+  }
+
+  .tree-node:hover {
+    background: var(--bg1);
+  }
+
+  .tree-indent {
+    display: flex;
+    align-items: stretch;
+    flex-shrink: 0;
+  }
+
+  .tree-line {
+    width: 16px;
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .tree-line::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--border2);
+  }
+
+  .tree-line.last::before {
+    bottom: 50%;
+  }
+
+  .tree-line::after {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    width: 8px;
+    height: 1px;
+    background: var(--border2);
+  }
+
+  .tree-pid {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+    letter-spacing: 0.04em;
+    min-width: 44px;
+    flex-shrink: 0;
+  }
+
+  .tree-model {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text2);
+    margin-left: 6px;
+  }
+
+  .tree-model-dot {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    margin-right: 5px;
+    vertical-align: middle;
+  }
+
+  .tree-model-dot.haiku  { background: #3d8a6e; }
+  .tree-model-dot.sonnet { background: #4a7fa8; }
+  .tree-model-dot.opus   { background: #b8882a; }
+  .tree-model-dot.unknown { background: var(--text4); }
+
+  /* ─── AGENTS PANEL ───────────────────────────────────────────── */
+
+  .agents-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .agents-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+
+  .agent-card {
+    margin: 0 8px 4px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 150ms ease;
+  }
+
+  .agent-card:hover {
+    border-color: var(--border3);
+  }
+
+  .agent-card.expanded {
+    border-color: var(--border3);
+  }
+
+  .agent-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px 6px;
+    background: var(--bg1);
+    gap: 8px;
+  }
+
+  .agent-id {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text2);
+    letter-spacing: 0.02em;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agent-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+
+  .agent-status.running {
+    background: rgba(90,158,111,0.1);
+    color: #5aaa88;
+    border: 1px solid rgba(90,158,111,0.2);
+  }
+
+  .agent-status.completed {
+    background: rgba(100,100,100,0.08);
+    color: var(--text3);
+    border: 1px solid var(--border2);
+  }
+
+  .agent-body {
+    padding: 6px 10px 8px;
+    background: var(--bg);
+  }
+
+  .agent-meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    gap: 8px;
+  }
+
+  .agent-cwd {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .agent-model-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text3);
+    flex-shrink: 0;
+  }
+
+  .agent-last-line {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.5;
+    margin-bottom: 5px;
+  }
+
+  .agent-tokens {
+    display: flex;
+    gap: 10px;
+  }
+
+  .token-item {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text3);
+  }
+
+  .token-item span {
+    color: var(--text2);
+  }
+
+  /* ─── CONVERSATION VIEW ──────────────────────────────────────── */
+
+  .agent-conv {
+    border-top: 1px solid var(--border);
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--bg);
+  }
+
+  .conv-msg {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .conv-msg:last-child {
+    border-bottom: none;
+  }
+
+  .conv-role {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text3);
+    margin-bottom: 3px;
+  }
+
+  .conv-role.assistant { color: #4a7fa8; }
+  .conv-role.user      { color: var(--text3); }
+
+  .conv-content {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text2);
+    line-height: 1.65;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .conv-loading {
+    padding: 16px 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+    text-align: center;
+  }
+
+  /* ─── LOG STRIP ──────────────────────────────────────────────── */
+
+  .log-strip {
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--bg);
+    transition: height 150ms ease;
+  }
+
+  .log-strip-header {
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    height: 32px;
+    cursor: pointer;
+    user-select: none;
+    gap: 10px;
+  }
+
+  .log-strip-header:hover {
+    background: var(--bg1);
+  }
+
+  .log-chevron {
+    font-size: 9px;
+    color: var(--text3);
+    transition: transform 150ms ease;
+  }
+
+  .log-chevron.open {
+    transform: rotate(180deg);
+  }
+
+  .log-strip-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text3);
+  }
+
+  .log-strip-preview {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .log-full {
+    display: none;
+    max-height: 160px;
+    overflow-y: auto;
+    padding: 0 16px 8px;
+  }
+
+  .log-full.open {
+    display: block;
+  }
+
+  .log-entry {
+    display: flex;
+    gap: 10px;
+    padding: 2px 0;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.6;
+  }
+
+  .log-entry:last-child { border-bottom: none; }
+
+  .log-time {
+    color: var(--text3);
+    flex-shrink: 0;
+    min-width: 56px;
+  }
+
+  .log-msg {
+    color: var(--text2);
+  }
+
+  /* ─── KILL MODAL ─────────────────────────────────────────────── */
+
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-overlay.open {
+    display: flex;
+  }
+
+  .modal {
+    background: var(--bg1);
+    border: 1px solid var(--border3);
+    border-radius: 6px;
+    padding: 20px 24px;
+    width: 320px;
+    box-shadow: 0 24px 48px rgba(0,0,0,0.6);
+  }
+
+  .modal-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .modal-pid {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 300;
+    color: var(--text);
+    letter-spacing: -0.02em;
+    margin-bottom: 10px;
+  }
+
+  .modal-warn {
+    font-size: 11px;
+    color: var(--text3);
+    margin-bottom: 20px;
+    line-height: 1.6;
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: all 150ms ease;
+    border: 1px solid transparent;
+    font-family: var(--font-ui);
+  }
+
+  .btn-ghost {
+    background: transparent;
+    border-color: var(--border3);
+    color: var(--text2);
+  }
+
+  .btn-ghost:hover {
+    border-color: var(--border3);
+    color: var(--text);
+    background: var(--bg2);
+  }
+
+  .btn-danger {
+    background: rgba(224,85,85,0.1);
+    border-color: rgba(224,85,85,0.25);
+    color: var(--red);
+  }
+
+  .btn-danger:hover {
+    background: rgba(224,85,85,0.2);
+    border-color: rgba(224,85,85,0.4);
+  }
+
+  /* ─── EMPTY STATE ────────────────────────────────────────────── */
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    color: var(--text3);
+    font-size: 11px;
+    gap: 6px;
+    font-family: var(--font-mono);
+  }
+
+  .empty-state .empty-icon {
+    font-size: 20px;
+    opacity: 0.3;
+    margin-bottom: 4px;
+  }
+
+  /* ─── TABS ───────────────────────────────────────────────────── */
+
+  .tab-btn {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0 14px;
+    height: 36px;
+    font-family: var(--font-ui);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text3);
+    cursor: pointer;
+    transition: all 150ms ease;
+  }
+
+  .tab-btn:hover { color: var(--text2); }
+
+  .tab-btn.active {
+    color: var(--text);
+    border-bottom-color: var(--text);
+  }
+
+  /* ─── SESSION GROUP ───────────────────────────────────────────── */
+
+  .session-group {
+    margin: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+
+  .session-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .session-header:hover { background: var(--bg3); }
+
+  .session-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--text3);
+    flex-shrink: 0;
+  }
+
+  .session-dot.has-running { background: var(--green); }
+
+  .session-id {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text3);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .session-badge {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text3);
+    padding: 1px 5px;
+    border: 1px solid var(--border2);
+    border-radius: 2px;
+  }
+
+  .session-chevron {
+    font-size: 8px;
+    color: var(--text3);
+    transition: transform 150ms ease;
+  }
+
+  .session-chevron.open { transform: rotate(90deg); }
+
+  .session-agents .agent-card {
+    margin: 0;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+  }
+
+  .session-agents .agent-card:last-child { border-bottom: none; }
+
+  /* ─── TASK CARD ───────────────────────────────────────────────── */
+
+  .task-card {
+    margin: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 8px 10px;
+    background: var(--bg1);
+    cursor: pointer;
+    transition: border-color 150ms ease;
+  }
+
+  .task-card:hover { border-color: var(--border3); }
+
+  .task-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+
+  .task-id {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text3);
+  }
+
+  .task-status {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+
+  .task-status.running {
+    background: rgba(90,158,111,0.1);
+    color: #5aaa88;
+    border: 1px solid rgba(90,158,111,0.2);
+  }
+
+  .task-status.completed {
+    background: rgba(100,100,100,0.08);
+    color: var(--text3);
+    border: 1px solid var(--border2);
+  }
+
+  .task-preview {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-bottom: 4px;
+  }
+
+  .task-meta {
+    display: flex;
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text3);
+  }
+
+  /* ─── MISC ───────────────────────────────────────────────────── */
+
+  .th-right { text-align: right !important; }
+
+  .no-select { user-select: none; }
+
+  .truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="header-left">
+      <span class="logo">claude monitor</span>
+    </div>
+    <div class="header-right">
+      <div class="header-meta">
+        <span class="meta-label">at</span>
+        <span class="meta-value" id="timestamp-display">—</span>
+      </div>
+      <div id="status-dot" class="status-dot"></div>
+      <button class="btn btn-ghost" id="refresh-btn" onclick="manualRefresh()" style="padding:4px 10px;font-size:10px;letter-spacing:0.06em;display:flex;align-items:center;gap:6px;">
+        <span id="refresh-icon">↻</span> Refresh
+      </button>
+    </div>
+  </header>
+
+  <!-- STATS BAR -->
+  <div class="stats-bar">
+    <div class="stat-item">
+      <span class="stat-num" id="stat-procs">0</span>
+      <span class="stat-label">processes</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-num" id="stat-agents">0</span>
+      <span class="stat-label">agents</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-num" id="stat-cpu">0.0%</span>
+      <span class="stat-label">cpu</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-num" id="stat-mem">0.0%</span>
+      <span class="stat-label">mem</span>
+    </div>
+  </div>
+
+  <!-- MAIN -->
+  <div class="main">
+
+    <!-- LEFT: Process Table -->
+    <div class="col-left">
+      <div class="panel-header">
+        <span class="panel-title">Processes</span>
+        <span class="panel-count" id="proc-count">0</span>
+      </div>
+      <div class="table-wrap">
+        <table class="process-table" id="process-table">
+          <thead>
+            <tr>
+              <th>PID</th>
+              <th>Model</th>
+              <th>Source</th>
+              <th>Session</th>
+              <th>TTY</th>
+              <th class="th-right">CPU</th>
+              <th class="th-right">MEM</th>
+              <th>Started</th>
+              <th class="td-expand"></th>
+            </tr>
+          </thead>
+          <tbody id="process-tbody">
+            <tr><td colspan="9"><div class="empty-state"><div class="empty-icon">◦</div>no processes</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- RIGHT COLUMN -->
+    <div class="col-right">
+
+      <!-- Process Tree -->
+      <div class="tree-panel">
+        <div class="panel-header">
+          <span class="panel-title">Tree</span>
+        </div>
+        <div class="tree-scroll" id="tree-scroll">
+          <div class="empty-state" style="padding:20px"><span style="font-size:11px">no processes</span></div>
+        </div>
+      </div>
+
+      <!-- Agents + Tasks (tabbed) -->
+      <div class="agents-panel">
+        <div class="panel-header" style="padding:0;">
+          <div style="display:flex;height:100%;border-bottom:none;">
+            <button class="tab-btn active" id="tab-agents" onclick="switchTab('agents')">Agents <span id="agent-count" style="color:var(--text3);font-size:9px;margin-left:3px;">0</span></button>
+            <button class="tab-btn" id="tab-tasks" onclick="switchTab('tasks')">Tasks <span id="task-count" style="color:var(--text3);font-size:9px;margin-left:3px;">0</span></button>
+          </div>
+        </div>
+        <div class="agents-scroll" id="agents-scroll">
+          <div class="empty-state" style="padding:20px"><span style="font-size:11px">no agents</span></div>
+        </div>
+        <div class="agents-scroll" id="tasks-scroll" style="display:none;">
+          <div class="empty-state" style="padding:20px"><span style="font-size:11px">no tasks</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- LOG STRIP -->
+  <div class="log-strip">
+    <div class="log-strip-header" id="log-toggle">
+      <span class="log-chevron" id="log-chevron">▲</span>
+      <span class="log-strip-label">Log</span>
+      <span class="log-strip-preview" id="log-preview">Waiting for data…</span>
+    </div>
+    <div class="log-full" id="log-full"></div>
+  </div>
+
+</div>
+
+<!-- KILL MODAL -->
+<div class="modal-overlay" id="kill-modal">
+  <div class="modal">
+    <div class="modal-title">Kill process</div>
+    <div class="modal-pid" id="modal-pid">—</div>
+    <div class="modal-warn">This will send SIGTERM to the process. This action cannot be undone.</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+      <button class="btn btn-danger" id="modal-confirm">Kill</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── STATE ────────────────────────────────────────────────────────────────────
+
+const state = {
+  data: null,
+  lastFetch: null,
+  expandedPids: new Set(),
+  expandedAgents: new Set(),
+  expandedSessions: new Set(),
+  killTarget: null,
+  logs: [],
+  logOpen: false,
+  agentConvData: {},
+  agentConvLoading: new Set(),
+  procConvData: {},
+  procConvLoading: new Set(),
+  activeTab: 'agents',
+  sessionNames: {},  // sessionId -> name
+};
+
+// ─── UTILS ────────────────────────────────────────────────────────────────────
+
+function fmt(n, decimals = 1) {
+  const v = parseFloat(n) || 0;
+  return v.toFixed(decimals);
+}
+
+function parseModel(modelStr) {
+  if (!modelStr) return 'unknown';
+  const m = modelStr.toLowerCase();
+  if (m.includes('haiku'))  return 'haiku';
+  if (m.includes('sonnet')) return 'sonnet';
+  if (m.includes('opus'))   return 'opus';
+  return 'unknown';
+}
+
+function parseCwdFromCmd(cmd) {
+  if (!cmd) return null;
+  // Look for --cwd or -C flags
+  const cwdMatch = cmd.match(/--cwd[= ]([^\s]+)/);
+  if (cwdMatch) return cwdMatch[1];
+  const cMatch = cmd.match(/-C\s+([^\s]+)/);
+  if (cMatch) return cMatch[1];
+  return null;
+}
+
+function shortPath(p) {
+  if (!p) return '—';
+  return p.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~');
+}
+
+function shortId(id) {
+  if (!id) return '—';
+  return id.length > 22 ? id.slice(0, 10) + '…' + id.slice(-8) : id;
+}
+
+function nowStr() {
+  return new Date().toLocaleTimeString('en-US', { hour12: false });
+}
+
+function addLog(msg) {
+  const entry = { time: nowStr(), msg };
+  state.logs.unshift(entry);
+  if (state.logs.length > 100) state.logs.pop();
+  renderLog();
+}
+
+// ─── FETCH ────────────────────────────────────────────────────────────────────
+
+async function fetchData() {
+  const btn = document.getElementById('refresh-btn');
+  const icon = document.getElementById('refresh-icon');
+  if (btn) btn.disabled = true;
+  if (icon) icon.style.display = 'inline-block', icon.style.animation = 'spin 0.6s linear infinite';
+  try {
+    const res = await fetch('http://localhost:7337/data', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    state.data = data;
+    state.lastFetch = Date.now();
+    document.getElementById('status-dot').className = 'status-dot connected';
+    addLog(`Refreshed — ${(data.processes || []).length} procs, ${(data.agents || []).length} agents`);
+    render(data);
+    flashTimestamp(data.timestamp);
+  } catch (e) {
+    document.getElementById('status-dot').className = 'status-dot error';
+    addLog(`Error: ${e.message} — is claude-monitor.sh running?`);
+  } finally {
+    if (btn) btn.disabled = false;
+    if (icon) icon.style.animation = '';
+  }
+}
+
+function manualRefresh() { fetchData(); }
+
+function flashTimestamp(ts) {
+  const el = document.getElementById('timestamp-display');
+  const d = ts ? new Date(ts) : new Date();
+  el.textContent = d.toLocaleTimeString('en-US', { hour12: false });
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 600);
+}
+
+// ─── RENDER ───────────────────────────────────────────────────────────────────
+
+function render(data) {
+  const procs   = data.processes || [];
+  const agents  = data.agents    || [];
+  // Store session names globally for use in renders
+  state.sessionNames = data.sessionNames || {};
+
+  // Stats
+  const totalCpu = procs.reduce((s, p) => s + (parseFloat(p.cpu) || 0), 0);
+  const totalMem = procs.reduce((s, p) => s + (parseFloat(p.mem) || 0), 0);
+  document.getElementById('stat-procs').textContent = procs.length;
+  document.getElementById('stat-agents').textContent = agents.length;
+  document.getElementById('stat-cpu').textContent   = fmt(totalCpu) + '%';
+  document.getElementById('stat-mem').textContent   = fmt(totalMem) + '%';
+  document.getElementById('proc-count').textContent  = procs.length;
+  document.getElementById('agent-count').textContent = agents.length;
+
+  // Tasks = agents shown in tasks tab too
+  const tasks = agents; // all agent output files are tasks
+  document.getElementById('task-count').textContent = tasks.length;
+
+  renderProcessTable(procs);
+  renderTree(procs);
+  renderAgents(agents);
+  renderTasks(tasks);
+}
+
+function fmtTokens(n) {
+  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n/1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+// ─── PROCESS TABLE ────────────────────────────────────────────────────────────
+
+function renderProcessTable(procs) {
+  const tbody = document.getElementById('process-tbody');
+
+  if (!procs.length) {
+    tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state"><div class="empty-icon">◦</div>no processes</div></td></tr>`;
+    return;
+  }
+
+  const rows = [];
+  for (const p of procs) {
+    const model    = parseModel(p.model);
+    const cpuNum   = parseFloat(p.cpu) || 0;
+    const cpuClass = cpuNum > 50 ? 'high' : cpuNum > 20 ? 'med' : '';
+    const expanded = state.expandedPids.has(p.pid);
+    const cwd      = parseCwdFromCmd(p.cmd) || '—';
+
+    rows.push(`
+      <tr data-pid="${p.pid}" class="proc-row" onclick="toggleProcExpand(${p.pid})">
+        <td class="td-pid">
+          <div style="display:flex;align-items:center;">
+            <span>${p.pid}</span>
+            <span class="kill-btn" onclick="openKillModal(event, ${p.pid})">×</span>
+          </div>
+        </td>
+        <td class="td-model"><span class="model-pill ${model}">${model}</span></td>
+        <td class="td-source"><span class="source-icon">${p.source || '—'}</span></td>
+        <td class="td-cwd">
+          ${p.sessionName
+            ? `<span style="color:var(--text);font-weight:500">${escHtml(p.sessionName)}</span>`
+            : p.sessionId
+              ? `<span style="color:var(--text3);font-family:var(--font-mono);font-size:9px">${p.sessionId.slice(0,8)}…</span>`
+              : '<span style="color:var(--text4)">—</span>'
+          }
+        </td>
+        <td class="td-tty">${p.tty || '—'}</td>
+        <td class="td-cpu ${cpuClass}" style="text-align:right">${fmt(p.cpu)}%</td>
+        <td class="td-mem" style="text-align:right">${fmt(p.mem)}%</td>
+        <td class="td-started">${p.started || '—'}</td>
+        <td class="td-expand"><span class="expand-btn no-select ${expanded ? 'open' : ''}">▶</span></td>
+      </tr>
+    `);
+
+    if (expanded) {
+      const vsz = p.vsz ? (p.vsz / 1e6).toFixed(1) + ' MB' : '—';
+      const rss = p.rss ? (p.rss / 1024).toFixed(1) + ' MB' : '—';
+      const cmdFormatted = formatCmd(p.cmd);
+
+      // Find agents launched by this session
+      const myAgents = (state.data?.agents || []).filter(a => a.sessionId === p.sessionId);
+      const agentsHtml = myAgents.length
+        ? `<div style="margin-top:12px">
+            <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text3);margin-bottom:6px">Agents (${myAgents.length})</div>
+            ${myAgents.map(a => {
+              const status = (a.status || 'unknown').toLowerCase();
+              const last = a.lastLine || '—';
+              const tok = a.tokens ? `${fmtTokens(a.tokens.input||0)} in / ${fmtTokens(a.tokens.output||0)} out` : '';
+              return `<div style="display:flex;align-items:baseline;gap:10px;padding:5px 0;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:10px">
+                <span style="color:var(--text3);flex-shrink:0">${a.id.slice(0,8)}…</span>
+                <span class="agent-status ${status}" style="flex-shrink:0">${status}</span>
+                <span style="color:var(--text2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(last)}</span>
+                <span style="color:var(--text3);flex-shrink:0">${tok}</span>
+              </div>`;
+            }).join('')}
+          </div>`
+        : '';
+
+      // Conversation for this process
+      const convMsgs = state.procConvData[p.pid];
+      const convLoading = state.procConvLoading.has(p.pid);
+      const convHtml = p.sessionId ? `
+        <div style="margin-top:12px">
+          <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text3);margin-bottom:6px">Last Messages</div>
+          ${convLoading
+            ? `<div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);padding:8px 0">Loading…</div>`
+            : !convMsgs || !convMsgs.length
+              ? `<div style="font-family:var(--font-mono);font-size:10px;color:var(--text3);padding:8px 0">No messages yet</div>`
+              : convMsgs.map(m => `
+                <div style="padding:6px 0;border-bottom:1px solid var(--border)">
+                  <div style="font-size:9px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:${m.role==='assistant'?'#4a7fa8':'var(--text3)'};margin-bottom:3px">${m.role}</div>
+                  <div style="font-family:var(--font-mono);font-size:10px;color:var(--text2);white-space:pre-wrap;word-break:break-word;line-height:1.6;max-height:120px;overflow-y:auto">${escHtml(m.content)}</div>
+                </div>`).join('')
+          }
+        </div>` : '';
+
+      rows.push(`
+        <tr class="expand-row">
+          <td colspan="9">
+            <div class="expand-content">
+              <div class="expand-grid">
+                <span class="expand-key">PPID</span><span class="expand-val">${p.ppid || '—'}</span>
+                <span class="expand-key">RSS</span><span class="expand-val">${rss}</span>
+                <span class="expand-key">VSZ</span><span class="expand-val">${vsz}</span>
+                <span class="expand-key">Stat</span><span class="expand-val">${p.stat || '—'}</span>
+                <span class="expand-key">Time</span><span class="expand-val">${p.time || '—'}</span>
+                ${p.sessionId ? `<span class="expand-key">Session</span><span class="expand-val" style="user-select:all">${p.sessionId}</span>` : ''}
+                ${p.sessionName ? `<span class="expand-key">Name</span><span class="expand-val" style="color:var(--text)">${escHtml(p.sessionName)}</span>` : ''}
+              </div>
+              <div class="cmd-block">${escHtml(cmdFormatted)}</div>
+              ${agentsHtml}
+              ${convHtml}
+            </div>
+          </td>
+        </tr>
+      `);
+    }
+  }
+
+  tbody.innerHTML = rows.join('');
+}
+
+function formatCmd(cmd) {
+  if (!cmd) return '—';
+  // Break after each flag for readability
+  return cmd.replace(/ --/g, ' \\\n  --').replace(/ -(?=[a-zA-Z])/g, ' \\\n  -');
+}
+
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function toggleProcExpand(pid) {
+  if (state.expandedPids.has(pid)) {
+    state.expandedPids.delete(pid);
+  } else {
+    state.expandedPids.add(pid);
+    // Find sessionId for this process and load its conversation
+    const p = (state.data?.processes || []).find(x => x.pid === pid);
+    if (p?.sessionId) loadProcConv(pid, p.sessionId);
+  }
+  if (state.data) renderProcessTable(state.data.processes || []);
+}
+
+async function loadProcConv(pid, sessionId) {
+  if (state.procConvData[pid] || state.procConvLoading.has(pid)) return;
+  state.procConvLoading.add(pid);
+  const p = (state.data?.processes || []).find(x => x.pid === pid);
+  const cwd = p?.cmd ? (p.cmd.match(/--cwd[= ]([^\s]+)/)?.[1] || '') : '';
+  try {
+    const url = `http://localhost:7337/session/${encodeURIComponent(sessionId)}` + (cwd ? `?cwd=${encodeURIComponent(cwd)}` : '');
+    const res = await fetch(url, { cache: 'no-store' });
+    if (res.ok) {
+      const d = await res.json();
+      state.procConvData[pid] = d.messages || [];
+    }
+  } catch (_) {}
+  finally {
+    state.procConvLoading.delete(pid);
+    if (state.data) renderProcessTable(state.data.processes || []);
+  }
+}
+
+// ─── PROCESS TREE ─────────────────────────────────────────────────────────────
+
+function renderTree(procs) {
+  const container = document.getElementById('tree-scroll');
+  const agents = state.data ? (state.data.agents || []) : [];
+  if (!procs.length) {
+    container.innerHTML = `<div class="empty-state" style="padding:20px"><span style="font-size:11px">no processes</span></div>`;
+    return;
+  }
+
+  // Group agents by sessionId
+  const agentsBySession = {};
+  agents.forEach(a => {
+    const sid = a.sessionId || '';
+    if (!agentsBySession[sid]) agentsBySession[sid] = [];
+    agentsBySession[sid].push(a);
+  });
+
+  const html = procs.map((p, pi) => {
+    const model = parseModel(p.model);
+    const isLastProc = pi === procs.length - 1;
+    const procAgents = agentsBySession[p.sessionId] || [];
+    const sessionLabel = p.sessionName || (p.sessionId ? p.sessionId.slice(0,8) : '—');
+
+    let out = `
+      <div class="tree-node">
+        <div class="tree-indent"></div>
+        <span class="tree-pid">${p.pid}</span>
+        <span class="tree-model"><span class="tree-model-dot ${model}"></span>${model}</span>
+        <span style="font-size:9px;color:var(--text3);margin-left:4px;overflow:hidden;text-overflow:ellipsis;max-width:90px;display:inline-block;vertical-align:middle">${sessionLabel}</span>
+      </div>`;
+
+    procAgents.forEach((a, ai) => {
+      const isLast = ai === procAgents.length - 1;
+      const aModel = parseModel(a.model || '');
+      const statusColor = a.status === 'running' ? 'var(--green)' : 'var(--text3)';
+      const preview = a.lastLine ? a.lastLine.slice(0, 40) + (a.lastLine.length > 40 ? '…' : '') : '';
+      out += `
+      <div class="tree-node" style="padding-left:16px">
+        <div class="tree-indent"><span class="tree-line${isLast ? ' last' : ''}"></span></div>
+        <span style="font-size:9px;color:${statusColor};margin-right:4px">${a.status === 'running' ? '●' : '○'}</span>
+        <span class="tree-pid" style="font-size:9px;color:var(--text3)">${a.id.slice(0,8)}</span>
+        <span class="tree-model"><span class="tree-model-dot ${aModel}"></span></span>
+        ${preview ? `<span style="font-size:9px;color:var(--text3);margin-left:4px;overflow:hidden;text-overflow:ellipsis;max-width:100px;display:inline-block;vertical-align:middle">${preview}</span>` : ''}
+      </div>`;
+    });
+
+    return out;
+  }).join('');
+
+  container.innerHTML = html;
+}
+
+// ─── TABS ─────────────────────────────────────────────────────────────────────
+
+function switchTab(tab) {
+  state.activeTab = tab;
+  document.getElementById('tab-agents').classList.toggle('active', tab === 'agents');
+  document.getElementById('tab-tasks').classList.toggle('active', tab === 'tasks');
+  document.getElementById('agents-scroll').style.display = tab === 'agents' ? '' : 'none';
+  document.getElementById('tasks-scroll').style.display  = tab === 'tasks'  ? '' : 'none';
+}
+
+// ─── AGENTS ───────────────────────────────────────────────────────────────────
+
+function renderAgents(agents) {
+  const container = document.getElementById('agents-scroll');
+  if (!agents.length) {
+    container.innerHTML = `<div class="empty-state" style="padding:20px"><span style="font-size:11px">no agents</span></div>`;
+    return;
+  }
+
+  // Group by sessionId
+  const sessions = {};
+  const noSession = [];
+  agents.forEach(a => {
+    const sid = a.sessionId || '';
+    if (sid) {
+      if (!sessions[sid]) sessions[sid] = [];
+      sessions[sid].push(a);
+    } else {
+      noSession.push(a);
+    }
+  });
+
+  let html = '';
+
+  // Render session groups
+  Object.entries(sessions).forEach(([sid, sagents]) => {
+    const hasRunning = sagents.some(a => a.status === 'running');
+    const expanded = state.expandedSessions.has(sid) !== false; // default open
+    // Default open sessions that haven't been explicitly collapsed
+    const isOpen = !state.expandedSessions.has('__closed__' + sid);
+    const shortSid = sid.slice(0, 8) + '…' + sid.slice(-4);
+    const sessionLabel = state.sessionNames[sid] || shortSid;
+
+    html += `
+      <div class="session-group">
+        <div class="session-header" onclick="toggleSession('${escHtml(sid)}')">
+          <span class="session-dot ${hasRunning ? 'has-running' : ''}"></span>
+          <span class="session-id">${escHtml(sessionLabel)}</span>
+          <span class="session-badge">${sagents.length}</span>
+          <span class="session-chevron ${isOpen ? 'open' : ''}">▶</span>
+        </div>
+        ${isOpen ? `<div class="session-agents">${sagents.map(a => agentCardHtml(a)).join('')}</div>` : ''}
+      </div>`;
+  });
+
+  // Render ungrouped agents
+  noSession.forEach(a => { html += agentCardHtml(a); });
+
+  container.innerHTML = html || `<div class="empty-state" style="padding:20px"><span style="font-size:11px">no agents</span></div>`;
+}
+
+function agentCardHtml(a) {
+  const expanded = state.expandedAgents.has(a.id);
+  const model    = parseModel(a.model);
+  const status   = (a.status || 'unknown').toLowerCase();
+  const cwd      = shortPath(a.cwd || null);
+  const lastLine = a.lastLine || '';
+  const convHtml = expanded ? renderConvHtml(a) : '';
+
+  let tokensHtml = '';
+  if (a.tokens && (a.tokens.input || a.tokens.output)) {
+    tokensHtml = `
+      <div class="agent-tokens">
+        <span class="token-item">in <span>${fmtTokens(a.tokens.input || 0)}</span></span>
+        <span class="token-item">out <span>${fmtTokens(a.tokens.output || 0)}</span></span>
+      </div>`;
+  }
+
+  return `
+    <div class="agent-card ${expanded ? 'expanded' : ''}" onclick="toggleAgent('${escHtml(a.id)}')">
+      <div class="agent-header">
+        <span class="agent-id">${a.sessionName ? `<span style="color:var(--text);font-weight:500">${escHtml(a.sessionName)}</span> <span style="color:var(--text3)">·</span> ` : ''}${escHtml(shortId(a.id))}</span>
+        <span class="agent-status ${status}">${status}</span>
+      </div>
+      <div class="agent-body">
+        <div class="agent-meta-row">
+          <span class="agent-cwd" title="${escHtml(a.cwd || '')}">${escHtml(cwd)}</span>
+          <span class="agent-model-label">${escHtml(a.model || model)}</span>
+        </div>
+        ${a.sessionId ? `<div style="font-family:var(--font-mono);font-size:9px;color:var(--text3);margin-bottom:3px;user-select:all" title="session id">${a.sessionId}</div>` : ''}
+        ${lastLine ? `<div class="agent-last-line">${escHtml(lastLine)}</div>` : ''}
+        ${tokensHtml}
+      </div>
+      ${expanded ? `<div class="agent-conv" onclick="event.stopPropagation()">${convHtml}</div>` : ''}
+    </div>`;
+}
+
+function toggleSession(sid) {
+  const key = '__closed__' + sid;
+  if (state.expandedSessions.has(key)) {
+    state.expandedSessions.delete(key);
+  } else {
+    state.expandedSessions.add(key);
+  }
+  if (state.data) renderAgents(state.data.agents || []);
+}
+
+// ─── TASKS ────────────────────────────────────────────────────────────────────
+
+function renderTasks(tasks) {
+  const container = document.getElementById('tasks-scroll');
+  if (!tasks.length) {
+    container.innerHTML = `<div class="empty-state" style="padding:20px"><span style="font-size:11px">no tasks</span></div>`;
+    return;
+  }
+
+  container.innerHTML = tasks.map(t => {
+    const status = (t.status || 'unknown').toLowerCase();
+    const model  = t.model || '—';
+    const cwd    = shortPath(t.cwd || null);
+    const last   = t.lastLine || '—';
+    const inTok  = fmtTokens(t.tokens?.input  || 0);
+    const outTok = fmtTokens(t.tokens?.output || 0);
+
+    return `
+      <div class="task-card">
+        <div class="task-header">
+          <span class="task-id">${escHtml(shortId(t.id))}</span>
+          <span class="task-status ${status}">${status}</span>
+        </div>
+        <div class="task-preview">${escHtml(last)}</div>
+        <div class="task-meta">
+          <span>${escHtml(cwd)}</span>
+          <span>${escHtml(model)}</span>
+          <span>${inTok} in / ${outTok} out</span>
+          <span>${t.lastUpdate || ''}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function renderConvHtml(agent) {
+  const data = state.agentConvData[agent.id];
+  if (state.agentConvLoading.has(agent.id)) {
+    return `<div class="conv-loading">Loading…</div>`;
+  }
+  if (!data || !data.length) {
+    // Show available info
+    const msgs = [];
+    if (agent.lastLine) {
+      msgs.push({ role: 'assistant', content: agent.lastLine });
+    }
+    if (!msgs.length) return `<div class="conv-loading">No conversation data</div>`;
+    return msgs.map(m => `
+      <div class="conv-msg">
+        <div class="conv-role ${m.role}">${m.role}</div>
+        <div class="conv-content">${escHtml(m.content)}</div>
+      </div>
+    `).join('');
+  }
+  return data.map(m => `
+    <div class="conv-msg">
+      <div class="conv-role ${m.role || 'unknown'}">${m.role || 'unknown'}</div>
+      <div class="conv-content">${escHtml(m.content || '')}</div>
+    </div>
+  `).join('');
+}
+
+function toggleAgent(id) {
+  if (state.expandedAgents.has(id)) {
+    state.expandedAgents.delete(id);
+  } else {
+    state.expandedAgents.add(id);
+    loadAgentConv(id);
+  }
+  if (state.data) renderAgents(state.data.agents || []);
+}
+
+async function loadAgentConv(id) {
+  if (state.agentConvData[id] || state.agentConvLoading.has(id)) return;
+  state.agentConvLoading.add(id);
+  try {
+    const res = await fetch(`http://localhost:7337/agent/${encodeURIComponent(id)}`, { cache: 'no-store' });
+    if (res.ok) {
+      const d = await res.json();
+      state.agentConvData[id] = d.messages || d.conversation || [];
+    }
+  } catch (_) {
+    // Silently fail — no conversation endpoint, show lastLine only
+  } finally {
+    state.agentConvLoading.delete(id);
+    if (state.data) renderAgents(state.data.agents || []);
+  }
+}
+
+// ─── KILL MODAL ───────────────────────────────────────────────────────────────
+
+function openKillModal(e, pid) {
+  e.stopPropagation();
+  state.killTarget = pid;
+  document.getElementById('modal-pid').textContent = pid;
+  document.getElementById('kill-modal').classList.add('open');
+}
+
+document.getElementById('modal-cancel').addEventListener('click', () => {
+  document.getElementById('kill-modal').classList.remove('open');
+  state.killTarget = null;
+});
+
+document.getElementById('kill-modal').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('kill-modal')) {
+    document.getElementById('kill-modal').classList.remove('open');
+    state.killTarget = null;
+  }
+});
+
+document.getElementById('modal-confirm').addEventListener('click', async () => {
+  const pid = state.killTarget;
+  if (!pid) return;
+  document.getElementById('kill-modal').classList.remove('open');
+  try {
+    await fetch(`http://localhost:7337/kill?pid=${pid}`, { method: 'GET' });
+    addLog(`Sent kill to PID ${pid}`);
+    setTimeout(fetchData, 800);
+  } catch (e) {
+    addLog(`Kill failed: ${e.message}`);
+  }
+  state.killTarget = null;
+});
+
+// ─── LOG STRIP ────────────────────────────────────────────────────────────────
+
+document.getElementById('log-toggle').addEventListener('click', () => {
+  state.logOpen = !state.logOpen;
+  document.getElementById('log-full').classList.toggle('open', state.logOpen);
+  document.getElementById('log-chevron').classList.toggle('open', state.logOpen);
+});
+
+function renderLog() {
+  const preview = state.logs[0]?.msg || 'Waiting for data…';
+  document.getElementById('log-preview').textContent = preview;
+
+  const full = document.getElementById('log-full');
+  full.innerHTML = state.logs.map(e => `
+    <div class="log-entry">
+      <span class="log-time">${e.time}</span>
+      <span class="log-msg">${escHtml(e.msg)}</span>
+    </div>
+  `).join('');
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+
+fetchData();
+setInterval(fetchData, 5000);
+</script>
+</body>
+</html>
