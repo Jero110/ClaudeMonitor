@@ -12,11 +12,58 @@ A local dashboard to monitor Claude Code processes and agents running on your Ma
 
 ## Requirements
 
-- macOS
+- Python 3.8+ (pre-installed on every Linux distro and macOS)
 - Claude Code CLI installed
-- zsh
+- No other dependencies
 
-## Installation
+## Quick start — any machine
+
+```bash
+python3 claude-monitor-server.py
+# Open http://localhost:7337
+```
+
+Custom port:
+```bash
+python3 claude-monitor-server.py 8080
+```
+
+## GCP / Remote VM
+
+```bash
+# On the VM:
+git clone <repo> && cd ClaudeMonitor
+python3 claude-monitor-server.py
+
+# On your laptop — SSH tunnel:
+ssh -L 7337:localhost:7337 user@your-vm-ip
+
+# Then open http://localhost:7337 in your browser
+```
+
+### Run as a systemd service (auto-start on boot)
+
+```bash
+sudo tee /etc/systemd/system/claude-monitor.service << EOF
+[Unit]
+Description=Claude Monitor
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/$USER/ClaudeMonitor/claude-monitor-server.py
+WorkingDirectory=/home/$USER/ClaudeMonitor
+Restart=always
+User=$USER
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl enable --now claude-monitor
+sudo systemctl status claude-monitor
+```
+
+## Installation (macOS legacy — zshrc setup)
 
 ### 1. Clone the repo
 
