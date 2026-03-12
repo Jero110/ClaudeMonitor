@@ -6,11 +6,14 @@ Works on macOS and Linux (any Python 3.8+, zero dependencies).
 Usage:
     python3 claude-monitor-server.py          # port 7337
     python3 claude-monitor-server.py 8080     # custom port
+    python3 claude-monitor-server.py --open   # open browser on start
+    python3 claude-monitor-server.py --install # install as daemon
 
 Open http://localhost:<port> in your browser.
 For remote VMs: ssh -L 7337:localhost:7337 user@host  then open localhost:7337
 """
 
+import argparse
 import glob
 import http.server
 import json
@@ -24,8 +27,14 @@ import sys
 import threading
 import time
 import urllib.parse
+import webbrowser
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 7337
+_parser = argparse.ArgumentParser(description='Claude Monitor Server')
+_parser.add_argument('port', nargs='?', type=int, default=7337, help='Port to listen on')
+_parser.add_argument('--open', action='store_true', help='Open browser after server starts')
+_parser.add_argument('--install', action='store_true', help='Install as system daemon')
+_args = _parser.parse_args()
+PORT = _args.port
 IS_LINUX = platform.system() == 'Linux'
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
@@ -39,9 +48,48 @@ DATA_FILE     = '/tmp/claude-monitor-data.json'
 
 UUID_RE = re.compile(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}')
 
+# ── Pricing & context windows ──────────────────────────────────────────────────
+CONTEXT_WINDOWS = {
+    'claude-opus-4':   200000,
+    'claude-sonnet-4': 200000,
+    'claude-haiku-4':  200000,
+}
+PRICING = {
+    'claude-opus-4-6':   {'input': 15.0,  'output': 75.0,  'cache_read': 1.5,  'cache_write': 18.75},
+    'claude-sonnet-4-6': {'input': 3.0,   'output': 15.0,  'cache_read': 0.3,  'cache_write': 3.75},
+    'claude-haiku-4-5':  {'input': 0.8,   'output': 4.0,   'cache_read': 0.08, 'cache_write': 1.0},
+}
+DEFAULT_CONTEXT = 200000
+
+
+def get_context_window(model):
+    for prefix, size in CONTEXT_WINDOWS.items():
+        if model.startswith(prefix):
+            return size
+    return DEFAULT_CONTEXT
+
+
+def calc_cost(model, input_tok, output_tok, cache_read=0, cache_write=0):
+    p = None
+    for name, pricing in PRICING.items():
+        if name in model or model in name:
+            p = pricing
+            break
+    if not p:
+        p = PRICING['claude-sonnet-4-6']
+    return (
+        input_tok  * p['input']       / 1e6 +
+        output_tok * p['output']      / 1e6 +
+        cache_read * p['cache_read']  / 1e6 +
+        cache_write * p['cache_write'] / 1e6
+    )
+
 # ── Shared data (collector → server) ──────────────────────────────────────────
 _data_lock = threading.Lock()
 _current_data = {'timestamp': '', 'processes': [], 'agents': [], 'sessionNames': {}, 'system': {}}
+
+_proc_order = {}  # pid -> first_seen float
+_proc_order_lock = threading.Lock()
 
 # ── Activity state (in-memory JSONL tail) ──────────────────────────────────────
 _activity_lock = threading.Lock()
@@ -85,11 +133,114 @@ TOOL_ICONS = {
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def load_session_names():
+    """Returns {uuid: name} dict, supporting both old (name->uuid) and new (name->{id:uuid}) formats."""
     try:
         data = json.load(open(SESSION_NAMES))
-        return {v['id']: k for k, v in data.items() if isinstance(v, dict) and 'id' in v}
+        result = {}
+        for k, v in data.items():
+            if isinstance(v, dict) and 'id' in v:
+                result[v['id']] = k
+            elif isinstance(v, str):
+                result[v] = k
+        return result
     except:
         return {}
+
+
+def load_session_names_raw():
+    """Returns raw dict from session-names.json."""
+    try:
+        return json.load(open(SESSION_NAMES))
+    except:
+        return {}
+
+
+def save_session_names(raw):
+    try:
+        with open(SESSION_NAMES, 'w') as f:
+            json.dump(raw, f, indent=2)
+        return True
+    except:
+        return False
+
+
+def session_tokens_from_jsonl(path):
+    """Returns last/cumulative token data from session jsonl."""
+    last_input = last_output = last_cache_read = last_cache_write = 0
+    model = ''
+    cwd = ''
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                    if not cwd and d.get('cwd'):
+                        cwd = d['cwd']
+                    msg = d.get('message', {})
+                    if not model and msg.get('model'):
+                        model = msg['model']
+                    usage = msg.get('usage', {})
+                    if usage:
+                        if usage.get('input_tokens'):
+                            last_input = usage.get('input_tokens', 0)
+                        if usage.get('output_tokens'):
+                            last_output = usage.get('output_tokens', 0)
+                        if usage.get('cache_creation_input_tokens'):
+                            last_cache_write = usage.get('cache_creation_input_tokens', 0)
+                        if usage.get('cache_read_input_tokens'):
+                            last_cache_read = usage.get('cache_read_input_tokens', 0)
+                except:
+                    pass
+    except:
+        pass
+    return model, cwd, last_input, last_output, last_cache_read, last_cache_write
+
+
+def list_all_sessions(active_sessions, agents, name_by_id):
+    sessions = []
+    seen = set()
+    for proj_dir in glob.glob(os.path.join(PROJECTS_DIR, '*')):
+        for jf in glob.glob(os.path.join(proj_dir, '*.jsonl')):
+            sid = os.path.splitext(os.path.basename(jf))[0]
+            if sid in seen or not UUID_RE.match(sid):
+                continue
+            seen.add(sid)
+            model, cwd, inp, out, cr, cw = session_tokens_from_jsonl(jf)
+            ctx = get_context_window(model)
+            ctx_used = inp + cr + cw  # input + cache_read + cache_write = real context
+            ctx_pct = round(ctx_used / ctx * 100, 1) if ctx and ctx_used else 0
+            cost = calc_cost(model, inp, out, cr, cw)
+            is_active = sid in active_sessions
+            agent_count = sum(1 for a in agents if a.get('sessionId') == sid)
+            team_count = 0
+            if os.path.isdir(TEAMS_DIR):
+                for tname in os.listdir(TEAMS_DIR):
+                    cfg_path = os.path.join(TEAMS_DIR, tname, 'config.json')
+                    try:
+                        cfg = json.load(open(cfg_path))
+                        if cfg.get('leadSessionId') == sid:
+                            team_count += 1
+                    except:
+                        pass
+            sessions.append({
+                'id': sid,
+                'name': name_by_id.get(sid, ''),
+                'model': model,
+                'cwd': cwd,
+                'is_active': is_active,
+                'tokens': {
+                    'input': inp, 'output': out,
+                    'cache_read': cr, 'cache_write': cw,
+                    'ctx_used': ctx_used,
+                    'context_window': ctx,
+                    'context_pct': ctx_pct,
+                },
+                'cost_usd': round(cost, 4),
+                'agent_count': agent_count,
+                'team_count': team_count,
+            })
+    sessions.sort(key=lambda s: (0 if s['is_active'] else 1, s['name'] or s['id']))
+    return sessions
 
 
 def get_ppid(pid):
@@ -171,6 +322,14 @@ def find_claude_processes():
         if re.match(r'(zsh|bash|sh)\s', cmd):
             continue
 
+        # Skip zombie/uninterruptible processes: Z state, or UE with tiny rss (<1MB)
+        if 'Z' in stat or ('U' in stat and 'E' in stat and rss < 1000):
+            continue
+
+        # Skip --version / -v one-shot invocations
+        if re.search(r'(\s|^)(-v|--version)(\s|$)', cmd):
+            continue
+
         source = 'vscode' if 'vscode' in cmd else 'terminal'
 
         model = 'unknown'
@@ -216,6 +375,19 @@ def collect_once():
         processes.append(p)
 
     now = time.time()
+
+    # Stable process ordering: assign first_seen timestamp and sort by it
+    with _proc_order_lock:
+        current_pids = {p['pid'] for p in processes}
+        for p in processes:
+            if p['pid'] not in _proc_order:
+                _proc_order[p['pid']] = now
+            p['first_seen'] = _proc_order[p['pid']]
+        # Clean up pids no longer present
+        for pid in list(_proc_order.keys()):
+            if pid not in current_pids:
+                del _proc_order[pid]
+    processes.sort(key=lambda p: p['first_seen'])
     agents = []
     for f in find_agent_outputs():
         if not os.path.isfile(f):
@@ -264,6 +436,15 @@ def collect_once():
             'lastLine': last_line, 'model': model, 'cwd': cwd,
             'tokens': {'input': input_tok, 'output': output_tok},
         })
+
+    # Deduplicate agents by id (macOS /tmp and /private/tmp are the same filesystem)
+    seen_agent_ids = set()
+    deduped = []
+    for a in agents:
+        if a['id'] not in seen_agent_ids:
+            seen_agent_ids.add(a['id'])
+            deduped.append(a)
+    agents = deduped
 
     result = {
         'timestamp':    time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
@@ -389,10 +570,9 @@ def state_to_result(st):
         chosen = chosen or next(iter(st['active_tools'].values()))
         return {'status': 'active', 'activity': chosen['label'], 'tool': chosen['name'],
                 'dissolved': False, 'dissolve_msg': ''}
-    if st['had_turn_duration']:
-        return {'status': 'waiting', 'activity': 'Waiting for input', 'tool': '',
-                'dissolved': False, 'dissolve_msg': ''}
-    if age > 12 and st['last_record_type'] == 'assistant':
+    # "Waiting for input" only when turn finished AND file has been idle for 5+ seconds
+    # (if age < 5, claude is still processing/writing; active_tools already cleared means turn done)
+    if st['had_turn_duration'] and 5 < age < 120:
         return {'status': 'waiting', 'activity': 'Waiting for input', 'tool': '',
                 'dissolved': False, 'dissolve_msg': ''}
     return {'status': 'idle', 'activity': '', 'tool': '', 'dissolved': False, 'dissolve_msg': ''}
@@ -750,6 +930,35 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
             _json_response(self, {'teams': result})
             return
 
+        # ── /sessions ──
+        if path == '/sessions':
+            with _data_lock:
+                agents = list(_current_data.get('agents', []))
+                active_sessions = set(p['sessionId'] for p in _current_data.get('processes', []) if p.get('sessionId'))
+            name_by_id = load_session_names()
+            sessions = list_all_sessions(active_sessions, agents, name_by_id)
+            _json_response(self, sessions)
+            return
+
+        # ── /stats ──
+        if path == '/stats':
+            with _data_lock:
+                agents = list(_current_data.get('agents', []))
+                active_sessions = set(p['sessionId'] for p in _current_data.get('processes', []) if p.get('sessionId'))
+            name_by_id = load_session_names()
+            sessions = list_all_sessions(active_sessions, agents, name_by_id)
+            active_only = [s for s in sessions if s['is_active']]
+            total_cost = sum(s['cost_usd'] for s in sessions)
+            total_input = sum(s['tokens']['input'] for s in sessions)
+            total_output = sum(s['tokens']['output'] for s in sessions)
+            _json_response(self, {
+                'active_sessions': len(active_sessions),
+                'sessions': active_only,
+                'total_cost_usd': round(total_cost, 4),
+                'total_tokens': {'input': total_input, 'output': total_output},
+            })
+            return
+
         # ── /stream/<session_id>  (SSE tail) ──
         if path.startswith('/stream/'):
             session_id = path[len('/stream/'):]
@@ -826,6 +1035,53 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
         path   = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
 
+        # ── DELETE /sessions/<id> ──
+        if path.startswith('/sessions/'):
+            session_id = path[len('/sessions/'):]
+            # Don't handle /sessions/<id>/rename here (that's POST)
+            if '/' not in session_id:
+                # Kill the process with this session_id
+                killed = False
+                with _data_lock:
+                    procs = list(_current_data.get('processes', []))
+                for p in procs:
+                    if p.get('sessionId') == session_id:
+                        try:
+                            os.kill(p['pid'], signal.SIGTERM)
+                            killed = True
+                        except Exception:
+                            pass
+                # Remove from session-names.json
+                raw = load_session_names_raw()
+                changed = False
+                for k, v in list(raw.items()):
+                    if (isinstance(v, dict) and v.get('id') == session_id) or v == session_id:
+                        del raw[k]
+                        changed = True
+                        break
+                if changed:
+                    save_session_names(raw)
+                _json_response(self, {'success': True, 'killed': killed, 'session_id': session_id})
+                return
+
+        # ── DELETE /agent/<id> ──
+        if path.startswith('/agent/'):
+            agent_id = path[len('/agent/'):]
+            if re.match(r'^[\w\-]+$', agent_id):
+                deleted = []
+                for pattern in [f'/tmp/claude-*/*/tasks/{agent_id}.output',
+                                 f'/private/tmp/claude-*/*/tasks/{agent_id}.output']:
+                    for f in glob.glob(pattern):
+                        try:
+                            os.remove(f)
+                            deleted.append(f)
+                        except:
+                            pass
+                _json_response(self, {'success': True, 'deleted': deleted})
+            else:
+                _json_response(self, {'error': 'Invalid agent id'}, 400)
+            return
+
         if path == '/team':
             name_list = params.get('name', [])
             if not name_list:
@@ -858,7 +1114,48 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-    def log_message(self, format, *args):  # noqa: A002
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path   = parsed.path
+
+        # ── POST /sessions/<id>/rename ──
+        m = re.match(r'^/sessions/([a-f0-9-]{36})/rename$', path)
+        if m:
+            session_id = m.group(1)
+            length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(length) if length else b'{}'
+            try:
+                payload = json.loads(body)
+                new_name = payload.get('name', '').strip()
+            except Exception:
+                _json_response(self, {'error': 'Invalid JSON'}, 400)
+                return
+            if not new_name:
+                _json_response(self, {'error': 'Missing name'}, 400)
+                return
+            raw = load_session_names_raw()
+            # Remove any existing mapping for this session_id (old or new format)
+            for k, v in list(raw.items()):
+                if (isinstance(v, dict) and v.get('id') == session_id) or v == session_id:
+                    del raw[k]
+                    break
+            # Write in new format
+            raw[new_name] = {'id': session_id}
+            if save_session_names(raw):
+                _json_response(self, {'success': True, 'name': new_name, 'id': session_id})
+            else:
+                _json_response(self, {'error': 'Failed to write session-names.json'}, 500)
+            return
+
+        # Future: POST /sessions to create new sessions
+        if path == '/sessions':
+            _json_response(self, {'error': 'Not implemented'}, 501)
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *_):
         pass  # silence access logs
 
 
@@ -904,7 +1201,70 @@ class ReuseServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+def _install_daemon():
+    script_path = os.path.abspath(__file__)
+    system = platform.system()
+    if system == 'Darwin':
+        plist_path = os.path.expanduser('~/Library/LaunchAgents/com.claudemonitor.plist')
+        plist = f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.claudemonitor</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{sys.executable}</string>
+    <string>{script_path}</string>
+    <string>{PORT}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/claude-monitor.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/claude-monitor.log</string>
+</dict>
+</plist>'''
+        with open(plist_path, 'w') as f:
+            f.write(plist)
+        subprocess.run(['launchctl', 'load', plist_path], check=False)
+        print(f'Installed launchd daemon: {plist_path}')
+        print('Run: launchctl unload ~/Library/LaunchAgents/com.claudemonitor.plist  to stop.')
+    elif system == 'Linux':
+        service_dir = os.path.expanduser('~/.config/systemd/user')
+        os.makedirs(service_dir, exist_ok=True)
+        service_path = os.path.join(service_dir, 'claude-monitor.service')
+        unit = f'''[Unit]
+Description=Claude Monitor Server
+After=network.target
+
+[Service]
+ExecStart={sys.executable} {script_path} {PORT}
+Restart=always
+StandardOutput=append:/tmp/claude-monitor.log
+StandardError=append:/tmp/claude-monitor.log
+
+[Install]
+WantedBy=default.target
+'''
+        with open(service_path, 'w') as f:
+            f.write(unit)
+        subprocess.run(['systemctl', '--user', 'daemon-reload'], check=False)
+        subprocess.run(['systemctl', '--user', 'enable', '--now', 'claude-monitor'], check=False)
+        print(f'Installed systemd user service: {service_path}')
+        print('Run: systemctl --user stop claude-monitor  to stop.')
+    else:
+        print(f'Unsupported platform for --install: {system}')
+
+
 if __name__ == '__main__':
+    if _args.install:
+        _install_daemon()
+        sys.exit(0)
+
     # Initial collection
     print(f'Claude Monitor — http://localhost:{PORT}')
     print(f'Platform: {platform.system()}')
@@ -920,6 +1280,13 @@ if __name__ == '__main__':
 
     server = ReuseServer(('0.0.0.0', PORT), MonitorHandler)
     print(f'Listening on 0.0.0.0:{PORT}  (Ctrl+C to stop)')
+
+    if _args.open:
+        def _open_browser():
+            time.sleep(0.5)
+            webbrowser.open(f'http://localhost:{PORT}')
+        threading.Thread(target=_open_browser, daemon=True).start()
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
